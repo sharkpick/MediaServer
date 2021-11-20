@@ -38,7 +38,7 @@ func NewSessionManager(db *sql.DB) *SessionManager {
 }
 
 func (s *SessionManager) SaveSession(session Session) {
-	insertQuery := `INSERT OR REPLACE INTO ` + SessionTable + `(id, ip) VALUES (?, ?)`
+	insertQuery := `INSERT OR REPLACE INTO ` + MyConfig.SessionTable + `(id, ip) VALUES (?, ?)`
 	statement, err := s.db.Prepare(insertQuery)
 	if err != nil {
 		log.Fatalln("error saving session", err)
@@ -50,7 +50,7 @@ func (s *SessionManager) SaveSession(session Session) {
 }
 
 func (s *SessionManager) NewSession(ip string) Session {
-	selectQuery := `SELECT id, ip FROM ` + SessionTable + ` WHERE ip=?`
+	selectQuery := `SELECT id, ip FROM ` + MyConfig.SessionTable + ` WHERE ip=?`
 	statement, err := s.db.Prepare(selectQuery)
 	if err != nil {
 		log.Fatalln("Error preparing statement in NewSession:", err)

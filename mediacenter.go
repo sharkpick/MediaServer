@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,7 +34,7 @@ func NewVideo(path string) (*Video, error) {
 		return nil, fmt.Errorf("file not found", err)
 	}
 	v.Path = path
-	if strings.Contains(path, AdultDirectory) {
+	if strings.Contains(path, MyConfig.AdultDirectory) {
 		v.Adult = true
 	} else {
 		v.Adult = false
@@ -45,14 +46,31 @@ func NewVideo(path string) (*Video, error) {
 }
 
 type MediaCenter struct {
-	db   *sql.DB
-	done chan interface{}
+	db     *sql.DB
+	titles map[string]int
+	done   chan interface{}
+	mutex  sync.Mutex
+}
+
+func (m *MediaCenter) AddTitle(title string, id int) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.titles[title] = id
+}
+
+func (m *MediaCenter) CheckLibrary(title string) (int, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if n, found := m.titles[title]; found {
+		return n, nil
+	}
+	return -1, fmt.Errorf("title %s not found in map", title)
 }
 
 func (m *MediaCenter) Videos() (a, g []Video) {
 	var adult []Video
 	var general []Video
-	selectQuery := `SELECT id, size, path, format, title, adult FROM ` + VideoTable + ` ORDER BY title ASC`
+	selectQuery := `SELECT id, size, path, format, title, adult FROM ` + MyConfig.VideoTable + ` ORDER BY title ASC`
 	statement, err := m.db.Prepare(selectQuery)
 	if err != nil {
 		log.Fatalln("Fatal Error:", err)
@@ -81,21 +99,22 @@ func (m *MediaCenter) Videos() (a, g []Video) {
 	return adult, general
 }
 
-func (m *MediaCenter) Add(v *Video, id ...int) {
-	insertSQL := `INSERT INTO ` + VideoTable + `(path, title, format, size, adult) VALUES (?, ?, ?, ?, ?)`
-	statement, err := m.db.Prepare(insertSQL)
-	if err != nil {
-		log.Fatalln("Fatal Error:", err)
-	}
-	adult := func() int {
-		if v.Adult {
-			return 1
+func (m *MediaCenter) Add(v *Video) {
+	if _, err := m.CheckLibrary(v.Title); err != nil {
+		insertSQL := `INSERT INTO ` + MyConfig.VideoTable + `(path, title, format, size, adult) VALUES (?, ?, ?, ?, ?)`
+		statement, err := m.db.Prepare(insertSQL)
+		if err != nil {
+			log.Fatalln("Fatal Error:", err)
 		}
-		return 0
-	}()
-	_, err = statement.Exec(v.Path, v.Title, v.Format, v.Size, adult)
-	if err != nil {
-		log.Printf("Error in Add(%s): %s", v.Title, err)
+		adult := func() int {
+			if v.Adult {
+				return 1
+			}
+			return 0
+		}()
+		statement.Exec(v.Path, v.Title, v.Format, v.Size, adult)
+		v, err = m.getVideoByTitle(v.Title)
+		m.AddTitle(v.Title, v.ID)
 	}
 }
 
@@ -103,9 +122,10 @@ func (m *MediaCenter) monitorForNewFiles(done <-chan interface{}) {
 	for {
 		select {
 		case <-m.done:
+			log.Println("done channel closed - return from monitor goroutine")
 			return
 		default:
-			for _, dir := range []string{MovieDirectory, AdultDirectory} {
+			for _, dir := range []string{MyConfig.MovieDirectory, MyConfig.AdultDirectory} {
 				files, err := ioutil.ReadDir(dir)
 				if err != nil {
 					log.Fatalln("Error walking", dir, err)
@@ -126,8 +146,7 @@ func (m *MediaCenter) monitorForNewFiles(done <-chan interface{}) {
 					}
 				}
 			}
-
-			time.Sleep(time.Minute * UpdateTimeMinutes)
+			time.Sleep(time.Second * time.Duration(MyConfig.UpdateTimeSeconds))
 		}
 	}
 }
@@ -137,7 +156,7 @@ func NewMediaCenter(db *sql.DB) *MediaCenter {
 		theMutex.Lock()
 		defer theMutex.Unlock()
 		if theMediaCenter == nil {
-			theMediaCenter = &MediaCenter{db: db, done: make(chan interface{})}
+			theMediaCenter = &MediaCenter{db: db, done: make(chan interface{}), titles: make(map[string]int)}
 			go theMediaCenter.monitorForNewFiles(theMediaCenter.done)
 		}
 	}
@@ -145,7 +164,7 @@ func NewMediaCenter(db *sql.DB) *MediaCenter {
 }
 
 func (m *MediaCenter) getVideoByTitle(title string) (*Video, error) {
-	selectQuery := `SELECT id, size, path, format, title FROM ` + VideoTable + ` WHERE title=?`
+	selectQuery := `SELECT id, size, path, format, title FROM ` + MyConfig.VideoTable + ` WHERE title=?`
 	statement, err := m.db.Prepare(selectQuery)
 	if err != nil {
 		return nil, fmt.Errorf(err.Error())
@@ -156,7 +175,7 @@ func (m *MediaCenter) getVideoByTitle(title string) (*Video, error) {
 }
 
 func (m *MediaCenter) getVideoByID(videoID int) (*Video, error) {
-	selectQuery := `SELECT id, size, path, format, title FROM ` + VideoTable + ` WHERE id=?`
+	selectQuery := `SELECT id, size, path, format, title FROM ` + MyConfig.VideoTable + ` WHERE id=?`
 	statement, err := m.db.Prepare(selectQuery)
 	if err != nil {
 		return nil, fmt.Errorf(err.Error())

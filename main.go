@@ -1,29 +1,26 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"text/template"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-)
-
-const (
-	MediaDirectory    = "/srv/Media/"
-	AdultDirectory    = MediaDirectory + "/Porn/"
-	MovieDirectory    = MediaDirectory + "/Movies/"
-	DatabaseFile      = "./VideoDatabase.db"
-	VideoTable        = "tVideo"
-	SessionTable      = "tSession"
-	UpdateTimeMinutes = 15
 )
 
 var (
 	MyCollection *MediaCenter
 	MySessions   *SessionManager
+	MyConfig     *ConfigManager = NewConfig()
+	mux                         = http.NewServeMux()
 )
 
 func serveVideo(w http.ResponseWriter, r *http.Request) {
@@ -69,14 +66,19 @@ func doIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func doFavicon(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "favicon.ico")
+}
+
 func setupHandlers() {
-	http.HandleFunc("/", doIndex)
-	http.HandleFunc("/video", serveVideo)
+	mux.HandleFunc("/", doIndex)
+	mux.HandleFunc("/video", serveVideo)
+	mux.HandleFunc("/favicon.ico", doFavicon)
 }
 
 func main() {
 	setupHandlers()
-	db, err := sql.Open("sqlite3", DatabaseFile)
+	db, err := sql.Open("sqlite3", MyConfig.DatabaseFile)
 	if err != nil {
 		log.Fatalln("Error opening database:", err)
 	}
@@ -85,5 +87,30 @@ func main() {
 	createVideoTable(db)
 	MyCollection = NewMediaCenter(db)
 	MySessions = NewSessionManager(db)
-	log.Fatalln(http.ListenAndServe(":1990", nil))
+	server := &http.Server{
+		Addr:    MyConfig.ListenPort,
+		Handler: mux,
+	}
+	done := make(chan os.Signal)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+	log.Println("server up")
+	<-done
+	log.Println("server stopped")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer func() {
+		log.Println("killing library worker")
+		close(MyCollection.done)
+		log.Println("killing config worker")
+		close(MyConfig.done)
+		cancel()
+	}()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalln("server shutdown failed:", err)
+	}
+	log.Println("server exited")
 }
