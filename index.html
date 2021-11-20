@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="ie=edge">
+        <title>Media Server</title>
+    </head>
+    <body>
+        <p>
+            Home Media Server - click to play in browser
+        </p>
+        <p>
+            <h3>Movies:</h3>
+            <ul style="list-style-type: none;">
+                {{ range .General }}
+                <li><a href="/video?title={{.Title}}">{{.Title}}</a></li>
+                {{ end }}
+            </ul>            
+            <h3>Adult Films:</h3>
+            <ul style="list-style-type: none;">
+                {{ range .Adult }}
+                <li><a href="/video?title={{.Title}}">{{.Title}}</a></li>
+                {{ end }}
+            </ul>
+            
+        </p>
+    </body>
+</html>
